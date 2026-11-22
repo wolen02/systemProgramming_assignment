@@ -57,6 +57,8 @@ int main(int argc, char *argv[]){
 
     // file offset을 공유하지 않도록 fork()한 후 생성
     for(int i=0; i<child_count; i++){
+        fflush(stdout);
+        
         pid_t pid = fork();
 
         // fork 실패 시 예외 처리

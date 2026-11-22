@@ -7,7 +7,8 @@
 #include<unistd.h>
 #include<sys/wait.h>
 #include<errno.h>
-#include<sys/stat.h>
+
+#define FIFO_PERMS (S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH)
 
 
 int isPrime(long n) {
@@ -46,6 +47,14 @@ int main(int argc, char *argv[]){
     // 한 번에 읽을 청크 사이즈
     long chunk_size = file_size/child_count;
 
+    // fork하기 전에 pipe 객체를 만들어둬야 자식의 fdt entry에도 pipe의 entry가 저장되기 때문에 fork()하기 전에 pipe객체 만들기
+    int pipe_fd[2];
+    if(pipe(pipe_fd) == -1){
+        // 이미 존재하면 그냥 실행
+        perror("Pipe failed\n");
+        return 1;
+    }
+
     // file offset을 공유하지 않도록 fork()한 후 생성
     for(int i=0; i<child_count; i++){
         pid_t pid = fork();
@@ -67,6 +76,9 @@ int main(int argc, char *argv[]){
             2. 범위 나누기(예외처리)
             3. 읽은 범위, 읽은 수 개수, 소수의 개수, 가장 큰 소수 출력
          */
+            // 자식 프로세스 read 닫기
+            close(pipe_fd[0]);
+
             int fd = open(file_name,O_RDONLY);
 
             // 예외 처리
@@ -141,18 +153,47 @@ int main(int argc, char *argv[]){
 
                 token = strtok_r(NULL,deli,&saveptr);
             }
+            
+            // pipe에 자식이 읽은 소수의 개수를 입력
+            ssize_t written = write(pipe_fd[1], &prime_count, sizeof(prime_count));
 
-            printf("[child %d] offset [%ld, %ld) numbers=%ld primes=%ld max= %ld\n", getpid(),start, end, read_count, prime_count, max);
+            if (written != sizeof(prime_count)) {
+                perror("pipe write failed");
+                exit(1);
+            }
+            // 자식 프로세스 write 닫기
+            close(pipe_fd[1]);
+            
+            printf("[child %d] offset [%ld, %ld) numbers=%ld primes=%ld max=%ld\n", getpid(),start, end, read_count, prime_count, max);
 
             return 0;
         }
     }
+    // 부모 프로세스 write 닫기
+    close(pipe_fd[1]);
 
 
     // 자식 프로세스가 끝날 때까지 대기
     int success_child = 0;
+    long total_prime_count = 0;
+
     for(int i=0; i<child_count; i++){
         int status;
+
+        // 자식이 pipe에 적은 값 가져오기
+        long long_prime;
+
+        ssize_t received = read(pipe_fd[0], &long_prime, sizeof(long_prime));
+
+        if (received != sizeof(long_prime)) {
+            fprintf(stderr, "pipe read failed\n");
+            exit(1);
+        }
+
+        total_prime_count += long_prime;
+
+        printf("[parent %ld] read value is %ld.\n", (long)getpid(), long_prime);
+
         pid_t child_id = wait(&status);
 
 
@@ -177,9 +218,11 @@ int main(int argc, char *argv[]){
         }
 
         if(success_child == child_count){
-          printf("[parent %d] found the number of all prime numbers.\n",getpid());
+          printf("[parent %d] Found %ld prime numbers in total.\n", getpid(), total_prime_count);
         }
     }
+    // 부모 프로세스 read 닫기
+    close(pipe_fd[0]);
 
 	
 	return 0;
